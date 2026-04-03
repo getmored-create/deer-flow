@@ -584,21 +584,23 @@ memory:
 #
 # Postgres mode: put your connection URL in .env as DATABASE_URL,
 # then reference it here with $DATABASE_URL.
-# Install the postgres driver: uv sync --extra postgres
+# Install the driver first:
+#   Local:  uv sync --extra postgres
+#   Docker: UV_EXTRAS=postgres docker compose build
 #
 # NOTE: When both `checkpointer` and `database` are configured,
 # `checkpointer` takes precedence for LangGraph state persistence.
 # If you use `database`, you can remove the `checkpointer` section.
 # database:
 #   backend: sqlite
-#   sqlite_dir: ./data
+#   sqlite_dir: .deer-flow/data
 #
 # database:
 #   backend: postgres
 #   postgres_url: $DATABASE_URL
 database:
   backend: sqlite
-  sqlite_dir: ./data
+  sqlite_dir: .deer-flow/data
 
 # ============================================================================
 # Run Events Configuration

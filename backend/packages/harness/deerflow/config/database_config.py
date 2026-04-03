@@ -39,7 +39,7 @@ class DatabaseConfig(BaseModel):
         description=("Storage backend for both checkpointer and application data. 'memory' for development (no persistence across restarts), 'sqlite' for single-node deployment, 'postgres' for production multi-node deployment."),
     )
     sqlite_dir: str = Field(
-        default="./data",
+        default=".deer-flow/data",
         description=("Directory for SQLite database files. Checkpointer uses {sqlite_dir}/checkpoints.db, application data uses {sqlite_dir}/app.db."),
     )
     postgres_url: str = Field(
