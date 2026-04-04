@@ -263,7 +263,7 @@ class RunJournal(BaseCallbackHandler):
             self._put(
                 event_type="summary",
                 category="message",
-                content=data_dict.get("summary", ""),
+                content={"role": "system", "content": data_dict.get("summary", "")},
                 metadata={"replaced_count": data_dict.get("replaced_count", 0)},
             )
         else:

@@ -214,6 +214,7 @@ class TestCustomEvents:
         messages = await store.list_messages("t1")
         assert len(messages) == 1
         assert messages[0]["event_type"] == "summary"
+        assert messages[0]["content"] == {"role": "system", "content": "Context was summarized."}
 
     @pytest.mark.anyio
     async def test_non_summarization_custom_event(self, journal_setup):
