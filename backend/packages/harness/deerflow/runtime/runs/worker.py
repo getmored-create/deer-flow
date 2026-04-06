@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -34,13 +35,29 @@ logger = logging.getLogger(__name__)
 _VALID_LG_MODES = {"values", "updates", "checkpoints", "tasks", "debug", "messages", "custom"}
 
 
+@dataclass(frozen=True)
+class RunContext:
+    """Infrastructure dependencies for a single agent run.
+
+    Groups checkpointer, store, and persistence-related singletons so that
+    ``run_agent`` (and any future callers) receive one object instead of a
+    growing list of keyword arguments.
+    """
+
+    checkpointer: Any
+    store: Any | None = field(default=None)
+    event_store: Any | None = field(default=None)
+    run_events_config: Any | None = field(default=None)
+    thread_meta_repo: Any | None = field(default=None)
+    follow_up_to_run_id: str | None = field(default=None)
+
+
 async def run_agent(
     bridge: StreamBridge,
     run_manager: RunManager,
     record: RunRecord,
     *,
-    checkpointer: Any,
-    store: Any | None = None,
+    ctx: RunContext,
     agent_factory: Any,
     graph_input: dict,
     config: dict,
@@ -48,12 +65,16 @@ async def run_agent(
     stream_subgraphs: bool = False,
     interrupt_before: list[str] | Literal["*"] | None = None,
     interrupt_after: list[str] | Literal["*"] | None = None,
-    event_store: Any | None = None,
-    run_events_config: Any | None = None,
-    follow_up_to_run_id: str | None = None,
-    thread_meta_repo: Any | None = None,
 ) -> None:
     """Execute an agent in the background, publishing events to *bridge*."""
+
+    # Unpack infrastructure dependencies from RunContext.
+    checkpointer = ctx.checkpointer
+    store = ctx.store
+    event_store = ctx.event_store
+    run_events_config = ctx.run_events_config
+    thread_meta_repo = ctx.thread_meta_repo
+    follow_up_to_run_id = ctx.follow_up_to_run_id
 
     run_id = record.run_id
     thread_id = record.thread_id
