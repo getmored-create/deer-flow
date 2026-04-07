@@ -2,6 +2,7 @@
  * API functions for file uploads
  */
 
+import { getCsrfHeaders } from "../api/fetcher";
 import { getBackendBaseURL } from "../config";
 
 export interface UploadedFileInfo {
@@ -54,7 +55,9 @@ export async function uploadFiles(
     `${getBackendBaseURL()}/api/threads/${threadId}/uploads`,
     {
       method: "POST",
+      headers: { ...getCsrfHeaders() },
       body: formData,
+      credentials: "include",
     },
   );
 
@@ -95,6 +98,8 @@ export async function deleteUploadedFile(
     `${getBackendBaseURL()}/api/threads/${threadId}/uploads/${filename}`,
     {
       method: "DELETE",
+      headers: { ...getCsrfHeaders() },
+      credentials: "include",
     },
   );
 

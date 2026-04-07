@@ -1,3 +1,4 @@
+import { getCsrfHeaders } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 
 import type { MCPConfig } from "./types";
@@ -12,8 +13,10 @@ export async function updateMCPConfig(config: MCPConfig) {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
+      ...getCsrfHeaders(),
     },
     body: JSON.stringify(config),
+    credentials: "include",
   });
   return response.json();
 }

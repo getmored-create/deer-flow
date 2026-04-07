@@ -5,9 +5,10 @@ import {
   ChevronsUpDown,
   GlobeIcon,
   InfoIcon,
+  LogOutIcon,
   MailIcon,
   Settings2Icon,
-  SettingsIcon,
+  UserIcon,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -25,6 +26,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { useAuth } from "@/core/auth/AuthProvider";
 import { useI18n } from "@/core/i18n/hooks";
 
 import { GithubIcon } from "./github-icon";
@@ -32,20 +34,22 @@ import { SettingsDialog } from "./settings";
 
 function NavMenuButtonContent({
   isSidebarOpen,
+  email,
   t,
 }: {
   isSidebarOpen: boolean;
+  email?: string;
   t: ReturnType<typeof useI18n>["t"];
 }) {
   return isSidebarOpen ? (
     <div className="text-muted-foreground flex w-full items-center gap-2 text-left text-sm">
-      <SettingsIcon className="size-4" />
-      <span>{t.workspace.settingsAndMore}</span>
-      <ChevronsUpDown className="text-muted-foreground ml-auto size-4" />
+      <UserIcon className="size-4 shrink-0" />
+      <span className="truncate">{email ?? t.workspace.settingsAndMore}</span>
+      <ChevronsUpDown className="text-muted-foreground ml-auto size-4 shrink-0" />
     </div>
   ) : (
     <div className="flex size-full items-center justify-center">
-      <SettingsIcon className="text-muted-foreground size-4" />
+      <UserIcon className="text-muted-foreground size-4" />
     </div>
   );
 }
@@ -53,11 +57,18 @@ function NavMenuButtonContent({
 export function WorkspaceNavMenu() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsDefaultSection, setSettingsDefaultSection] = useState<
-    "appearance" | "memory" | "tools" | "skills" | "notification" | "about"
+    | "account"
+    | "appearance"
+    | "memory"
+    | "tools"
+    | "skills"
+    | "notification"
+    | "about"
   >("appearance");
   const [mounted, setMounted] = useState(false);
   const { open: isSidebarOpen } = useSidebar();
   const { t } = useI18n();
+  const { user, logout } = useAuth();
 
   useEffect(() => {
     setMounted(true);
@@ -79,7 +90,11 @@ export function WorkspaceNavMenu() {
                   size="lg"
                   className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
                 >
-                  <NavMenuButtonContent isSidebarOpen={isSidebarOpen} t={t} />
+                  <NavMenuButtonContent
+                    isSidebarOpen={isSidebarOpen}
+                    email={user?.email}
+                    t={t}
+                  />
                 </SidebarMenuButton>
               </DropdownMenuTrigger>
               <DropdownMenuContent
@@ -87,6 +102,14 @@ export function WorkspaceNavMenu() {
                 align="end"
                 sideOffset={4}
               >
+                {user?.email && (
+                  <>
+                    <div className="text-muted-foreground truncate px-2 py-1.5 text-xs">
+                      {user.email}
+                    </div>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
                 <DropdownMenuGroup>
                   <DropdownMenuItem
                     onClick={() => {
@@ -146,11 +169,24 @@ export function WorkspaceNavMenu() {
                   <InfoIcon />
                   {t.workspace.about}
                 </DropdownMenuItem>
+                {user && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={logout}>
+                      <LogOutIcon />
+                      {t.workspace.logout}
+                    </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           ) : (
             <SidebarMenuButton size="lg" className="pointer-events-none">
-              <NavMenuButtonContent isSidebarOpen={isSidebarOpen} t={t} />
+              <NavMenuButtonContent
+                isSidebarOpen={isSidebarOpen}
+                email={user?.email}
+                t={t}
+              />
             </SidebarMenuButton>
           )}
         </SidebarMenuItem>

@@ -1,3 +1,4 @@
+import { getCsrfHeaders } from "../api/fetcher";
 import { getBackendBaseURL } from "../config";
 
 import type {
@@ -87,6 +88,8 @@ export async function loadMemory(): Promise<UserMemory> {
 export async function clearMemory(): Promise<UserMemory> {
   const response = await fetch(`${getBackendBaseURL()}/api/memory`, {
     method: "DELETE",
+    headers: { ...getCsrfHeaders() },
+    credentials: "include",
   });
   return readMemoryResponse(response, "Failed to clear memory");
 }
@@ -96,6 +99,8 @@ export async function deleteMemoryFact(factId: string): Promise<UserMemory> {
     `${getBackendBaseURL()}/api/memory/facts/${encodeURIComponent(factId)}`,
     {
       method: "DELETE",
+      headers: { ...getCsrfHeaders() },
+      credentials: "include",
     },
   );
   return readMemoryResponse(response, "Failed to delete memory fact");
@@ -111,8 +116,10 @@ export async function importMemory(memory: UserMemory): Promise<UserMemory> {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      ...getCsrfHeaders(),
     },
     body: JSON.stringify(memory),
+    credentials: "include",
   });
   return readMemoryResponse(response, "Failed to import memory");
 }
@@ -124,8 +131,10 @@ export async function createMemoryFact(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      ...getCsrfHeaders(),
     },
     body: JSON.stringify(input),
+    credentials: "include",
   });
   return readMemoryResponse(response, "Failed to create memory fact");
 }
@@ -140,8 +149,10 @@ export async function updateMemoryFact(
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
+        ...getCsrfHeaders(),
       },
       body: JSON.stringify(input),
+      credentials: "include",
     },
   );
   return readMemoryResponse(response, "Failed to update memory fact");

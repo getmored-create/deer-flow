@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.gateway.authz import require_auth, require_permission
 from app.gateway.deps import get_checkpointer, get_run_manager, get_stream_bridge
 from app.gateway.services import sse_consumer, start_run
 from deerflow.runtime import RunRecord, serialize_channel_values
@@ -92,19 +93,28 @@ def _record_to_response(record: RunRecord) -> RunResponse:
 
 
 @router.post("/{thread_id}/runs", response_model=RunResponse)
+@require_auth
+@require_permission("runs", "create", owner_check=True)
 async def create_run(thread_id: str, body: RunCreateRequest, request: Request) -> RunResponse:
-    """Create a background run (returns immediately)."""
+    """Create a background run (returns immediately).
+
+    Multi-tenant isolation: only the thread owner can create runs.
+    """
     record = await start_run(body, thread_id, request)
     return _record_to_response(record)
 
 
 @router.post("/{thread_id}/runs/stream")
+@require_auth
+@require_permission("runs", "create", owner_check=True)
 async def stream_run(thread_id: str, body: RunCreateRequest, request: Request) -> StreamingResponse:
     """Create a run and stream events via SSE.
 
     The response includes a ``Content-Location`` header with the run's
     resource URL, matching the LangGraph Platform protocol.  The
     ``useStream`` React hook uses this to extract run metadata.
+
+    Multi-tenant isolation: only the thread owner can stream runs.
     """
     bridge = get_stream_bridge(request)
     run_mgr = get_run_manager(request)
@@ -125,8 +135,13 @@ async def stream_run(thread_id: str, body: RunCreateRequest, request: Request) -
 
 
 @router.post("/{thread_id}/runs/wait", response_model=dict)
+@require_auth
+@require_permission("runs", "create", owner_check=True)
 async def wait_run(thread_id: str, body: RunCreateRequest, request: Request) -> dict:
-    """Create a run and block until it completes, returning the final state."""
+    """Create a run and block until it completes, returning the final state.
+
+    Multi-tenant isolation: only the thread owner can wait for runs.
+    """
     record = await start_run(body, thread_id, request)
 
     if record.task is not None:
@@ -150,16 +165,26 @@ async def wait_run(thread_id: str, body: RunCreateRequest, request: Request) -> 
 
 
 @router.get("/{thread_id}/runs", response_model=list[RunResponse])
+@require_auth
+@require_permission("runs", "read", owner_check=True)
 async def list_runs(thread_id: str, request: Request) -> list[RunResponse]:
-    """List all runs for a thread."""
+    """List all runs for a thread.
+
+    Multi-tenant isolation: only the thread owner can list runs.
+    """
     run_mgr = get_run_manager(request)
     records = await run_mgr.list_by_thread(thread_id)
     return [_record_to_response(r) for r in records]
 
 
 @router.get("/{thread_id}/runs/{run_id}", response_model=RunResponse)
+@require_auth
+@require_permission("runs", "read", owner_check=True)
 async def get_run(thread_id: str, run_id: str, request: Request) -> RunResponse:
-    """Get details of a specific run."""
+    """Get details of a specific run.
+
+    Multi-tenant isolation: only the thread owner can get runs.
+    """
     run_mgr = get_run_manager(request)
     record = run_mgr.get(run_id)
     if record is None or record.thread_id != thread_id:
@@ -168,6 +193,8 @@ async def get_run(thread_id: str, run_id: str, request: Request) -> RunResponse:
 
 
 @router.post("/{thread_id}/runs/{run_id}/cancel")
+@require_auth
+@require_permission("runs", "cancel", owner_check=True)
 async def cancel_run(
     thread_id: str,
     run_id: str,
@@ -181,6 +208,8 @@ async def cancel_run(
     - action=rollback: Stop execution, revert to pre-run checkpoint state
     - wait=true: Block until the run fully stops, return 204
     - wait=false: Return immediately with 202
+
+    Multi-tenant isolation: only the thread owner can cancel runs.
     """
     run_mgr = get_run_manager(request)
     record = run_mgr.get(run_id)
@@ -205,8 +234,13 @@ async def cancel_run(
 
 
 @router.get("/{thread_id}/runs/{run_id}/join")
+@require_auth
+@require_permission("runs", "read", owner_check=True)
 async def join_run(thread_id: str, run_id: str, request: Request) -> StreamingResponse:
-    """Join an existing run's SSE stream."""
+    """Join an existing run's SSE stream.
+
+    Multi-tenant isolation: only the thread owner can join runs.
+    """
     bridge = get_stream_bridge(request)
     run_mgr = get_run_manager(request)
     record = run_mgr.get(run_id)

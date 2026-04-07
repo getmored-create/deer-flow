@@ -40,6 +40,11 @@ export interface Translations {
     exportSuccess: string;
   };
 
+  home: {
+    docs: string;
+    blog: string;
+  };
+
   // Welcome
   welcome: {
     greeting: string;
@@ -136,6 +141,13 @@ export interface Translations {
     nameStepNetworkError: string;
     nameStepCheckError: string;
     nameStepBootstrapMessage: string;
+    save: string;
+    saving: string;
+    saveRequested: string;
+    saveHint: string;
+    saveCommandMessage: string;
+    agentCreatedPendingRefresh: string;
+    more: string;
     agentCreated: string;
     startChatting: string;
     backToGallery: string;
@@ -156,6 +168,7 @@ export interface Translations {
     reportIssue: string;
     contactUs: string;
     about: string;
+    logout: string;
   };
 
   // Conversation
@@ -238,6 +251,7 @@ export interface Translations {
     title: string;
     description: string;
     sections: {
+      account: string;
       appearance: string;
       memory: string;
       tools: string;

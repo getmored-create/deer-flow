@@ -1,3 +1,4 @@
+import { getCsrfHeaders } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 
 import type { Agent, CreateAgentRequest, UpdateAgentRequest } from "./types";
@@ -30,8 +31,9 @@ export async function getAgent(name: string): Promise<Agent> {
 export async function createAgent(request: CreateAgentRequest): Promise<Agent> {
   const res = await fetch(`${getBackendBaseURL()}/api/agents`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getCsrfHeaders() },
     body: JSON.stringify(request),
+    credentials: "include",
   });
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as { detail?: string };
@@ -46,8 +48,9 @@ export async function updateAgent(
 ): Promise<Agent> {
   const res = await fetch(`${getBackendBaseURL()}/api/agents/${name}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getCsrfHeaders() },
     body: JSON.stringify(request),
+    credentials: "include",
   });
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as { detail?: string };
@@ -59,6 +62,8 @@ export async function updateAgent(
 export async function deleteAgent(name: string): Promise<void> {
   const res = await fetch(`${getBackendBaseURL()}/api/agents/${name}`, {
     method: "DELETE",
+    headers: { ...getCsrfHeaders() },
+    credentials: "include",
   });
   if (!res.ok) throw new Error(`Failed to delete agent: ${res.statusText}`);
 }

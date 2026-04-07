@@ -10,12 +10,24 @@ function getInternalServiceURL(envKey, fallbackURL) {
     ? configured.replace(/\/+$/, "")
     : fallbackURL;
 }
+import nextra from "nextra";
+
+const withNextra = nextra({});
 
 /** @type {import("next").NextConfig} */
 const config = {
+  i18n: {
+    locales: ["en", "zh"],
+    defaultLocale: "en",
+  },
   devIndicators: false,
+  allowedDevOrigins: process.env.NEXT_DEV_ALLOWED_ORIGINS
+    ? process.env.NEXT_DEV_ALLOWED_ORIGINS.split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [],
   async rewrites() {
-    const rewrites = [];
+    const beforeFiles = [];
     const langgraphURL = getInternalServiceURL(
       "DEER_FLOW_INTERNAL_LANGGRAPH_BASE_URL",
       "http://127.0.0.1:2024",
@@ -26,29 +38,49 @@ const config = {
     );
 
     if (!process.env.NEXT_PUBLIC_LANGGRAPH_BASE_URL) {
-      rewrites.push({
+      beforeFiles.push({
         source: "/api/langgraph",
         destination: langgraphURL,
       });
-      rewrites.push({
+      beforeFiles.push({
         source: "/api/langgraph/:path*",
         destination: `${langgraphURL}/:path*`,
       });
     }
 
+    // Auth endpoints: explicit v1/auth prefix only (deny-by-default)
+    beforeFiles.push({
+      source: "/api/v1/auth/:path*",
+      destination: `${gatewayURL}/api/v1/auth/:path*`,
+    });
+
+    // LangGraph-compat: handled by route handler at /api/langgraph-compat/[...path]
+    // with allowlist, header sanitization, and timeout — no rewrite needed.
+
     if (!process.env.NEXT_PUBLIC_BACKEND_BASE_URL) {
-      rewrites.push({
-        source: "/api/agents",
-        destination: `${gatewayURL}/api/agents`,
-      });
-      rewrites.push({
-        source: "/api/agents/:path*",
-        destination: `${gatewayURL}/api/agents/:path*`,
-      });
+      // Explicit gateway API prefixes (deny-by-default, no catch-all)
+      const GATEWAY_PREFIXES = [
+        "agents",
+        "models",
+        "threads",
+        "memory",
+        "skills",
+        "mcp",
+      ];
+      for (const prefix of GATEWAY_PREFIXES) {
+        beforeFiles.push({
+          source: `/api/${prefix}`,
+          destination: `${gatewayURL}/api/${prefix}`,
+        });
+        beforeFiles.push({
+          source: `/api/${prefix}/:path*`,
+          destination: `${gatewayURL}/api/${prefix}/:path*`,
+        });
+      }
     }
 
-    return rewrites;
+    return { beforeFiles, afterFiles: [], fallback: [] };
   },
 };
 
-export default config;
+export default withNextra(config);

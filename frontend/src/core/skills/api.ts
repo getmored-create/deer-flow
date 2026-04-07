@@ -1,3 +1,4 @@
+import { getCsrfHeaders } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 
 import type { Skill } from "./type";
@@ -15,10 +16,12 @@ export async function enableSkill(skillName: string, enabled: boolean) {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
+        ...getCsrfHeaders(),
       },
       body: JSON.stringify({
         enabled,
       }),
+      credentials: "include",
     },
   );
   return response.json();
@@ -42,8 +45,10 @@ export async function installSkill(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      ...getCsrfHeaders(),
     },
     body: JSON.stringify(request),
+    credentials: "include",
   });
 
   if (!response.ok) {
