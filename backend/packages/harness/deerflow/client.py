@@ -336,6 +336,52 @@ class DeerFlowClient:
         consumers can switch between HTTP streaming and embedded mode
         without changing their event-handling logic.
 
+        Token-level streaming
+        ~~~~~~~~~~~~~~~~~~~~~
+        This method subscribes to LangGraph's ``messages`` stream mode, so
+        ``messages-tuple`` events for AI text are emitted as **deltas** as
+        the model generates tokens, not as one cumulative dump at node
+        completion.  Each delta carries a stable ``id`` — consumers that
+        want the full text must accumulate ``content`` per ``id``.
+        ``chat()`` already does this for you.
+
+        Tool calls and tool results are still emitted once per logical
+        message.  ``values`` events continue to carry full state snapshots
+        after each graph node finishes; AI text already delivered via the
+        ``messages`` stream is **not** re-synthesized from the snapshot to
+        avoid duplicate deliveries.
+
+        Why not reuse Gateway's ``run_agent``?
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        Gateway (``runtime/runs/worker.py``) has a complete streaming
+        pipeline: ``run_agent`` → ``StreamBridge`` → ``sse_consumer``.  It
+        looks like this client duplicates that work, but the two paths
+        serve different audiences and **cannot** share execution:
+
+        * ``run_agent`` is ``async def`` and uses ``agent.astream()``;
+          this method is a sync generator using ``agent.stream()`` so
+          callers can write ``for event in client.stream(...)`` without
+          touching asyncio.  Bridging the two would require spinning up
+          an event loop + thread per call.
+        * Gateway events are JSON-serialized by ``serialize()`` for SSE
+          wire transmission.  In-process callers want the raw LangChain
+          objects (``AIMessage``, ``usage_metadata`` as dataclasses), not
+          dicts.
+        * ``StreamBridge`` is an asyncio-queue decoupling producers from
+          consumers across an HTTP boundary (``Last-Event-ID`` replay,
+          heartbeats, multi-subscriber fan-out).  A single in-process
+          caller with a direct iterator needs none of that.
+
+        So ``DeerFlowClient.stream()`` is a parallel, sync, in-process
+        consumer of the same ``create_agent()`` factory — not a wrapper
+        around Gateway.  The two paths **should** stay in sync on which
+        LangGraph stream modes they subscribe to; that invariant is
+        enforced by ``tests/test_client.py::test_messages_mode_emits_token_deltas``
+        rather than by a shared constant, because the three layers
+        (Graph, Platform SDK, HTTP) each use their own naming
+        (``messages`` vs ``messages-tuple``) and cannot literally share
+        a string.
+
         Args:
             message: User message text.
             thread_id: Thread ID for conversation context. Auto-generated if None.
@@ -346,8 +392,8 @@ class DeerFlowClient:
             StreamEvent with one of:
             - type="values"          data={"title": str|None, "messages": [...], "artifacts": [...]}
             - type="custom"          data={...}
-            - type="messages-tuple"  data={"type": "ai", "content": str, "id": str}
-            - type="messages-tuple"  data={"type": "ai", "content": str, "id": str, "usage_metadata": {...}}
+            - type="messages-tuple"  data={"type": "ai", "content": <delta>, "id": str}
+            - type="messages-tuple"  data={"type": "ai", "content": <delta>, "id": str, "usage_metadata": {...}}
             - type="messages-tuple"  data={"type": "ai", "content": "", "id": str, "tool_calls": [...]}
             - type="messages-tuple"  data={"type": "tool", "content": str, "name": str, "tool_call_id": str, "id": str}
             - type="end"             data={"usage": {"input_tokens": int, "output_tokens": int, "total_tokens": int}}
@@ -363,14 +409,52 @@ class DeerFlowClient:
         if self._agent_name:
             context["agent_name"] = self._agent_name
 
+        # ids already emitted as a complete message via the ``values``
+        # snapshot path — used by the values path itself to avoid
+        # duplicate per-message synthesis when the same message appears
+        # in consecutive snapshots.
         seen_ids: set[str] = set()
+        # ids whose text / tool_calls have already been streamed via the
+        # LangGraph ``messages`` mode.  The ``values`` path uses this set
+        # to skip re-emitting synthesized messages-tuple events for the
+        # same message.
+        streamed_ids: set[str] = set()
+        # ids whose ``usage_metadata`` has already been counted into
+        # ``cumulative_usage``.  The same message id shows up both in
+        # ``messages`` chunks (last chunk carries usage) and in ``values``
+        # snapshots (final AIMessage carries the same usage) — count once.
+        counted_usage_ids: set[str] = set()
         cumulative_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+        def _account_usage(msg_id: str | None, usage: dict | None) -> dict | None:
+            """Add *usage* to cumulative totals if this id has not been counted.
+
+            Returns the normalized usage dict (for attaching to an event)
+            when we accepted it, otherwise ``None``.
+            """
+            if not usage:
+                return None
+            if msg_id and msg_id in counted_usage_ids:
+                return None
+            if msg_id:
+                counted_usage_ids.add(msg_id)
+            input_tokens = usage.get("input_tokens", 0) or 0
+            output_tokens = usage.get("output_tokens", 0) or 0
+            total_tokens = usage.get("total_tokens", 0) or 0
+            cumulative_usage["input_tokens"] += input_tokens
+            cumulative_usage["output_tokens"] += output_tokens
+            cumulative_usage["total_tokens"] += total_tokens
+            return {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": total_tokens,
+            }
 
         for item in self._agent.stream(
             state,
             config=config,
             context=context,
-            stream_mode=["values", "custom"],
+            stream_mode=["values", "messages", "custom"],
         ):
             if isinstance(item, tuple) and len(item) == 2:
                 mode, chunk = item
@@ -382,6 +466,62 @@ class DeerFlowClient:
                 yield StreamEvent(type="custom", data=chunk)
                 continue
 
+            if mode == "messages":
+                # LangGraph emits ``(message_chunk, metadata_dict)`` for
+                # each LLM delta and each tool message.  ``message_chunk``
+                # is typically an ``AIMessageChunk`` (subclass of
+                # ``AIMessage``) during LLM streaming; for tool nodes it
+                # is a ``ToolMessage``.
+                if isinstance(chunk, tuple) and len(chunk) == 2:
+                    msg_chunk, _metadata = chunk
+                else:
+                    msg_chunk = chunk
+
+                msg_id = getattr(msg_chunk, "id", None)
+
+                if isinstance(msg_chunk, AIMessage):
+                    text = self._extract_text(msg_chunk.content)
+                    usage = getattr(msg_chunk, "usage_metadata", None)
+                    counted_usage = _account_usage(msg_id, usage)
+
+                    if text:
+                        if msg_id:
+                            streamed_ids.add(msg_id)
+                        event_data: dict[str, Any] = {"type": "ai", "content": text, "id": msg_id}
+                        if counted_usage:
+                            event_data["usage_metadata"] = counted_usage
+                        yield StreamEvent(type="messages-tuple", data=event_data)
+
+                    tool_calls = getattr(msg_chunk, "tool_calls", None)
+                    if tool_calls:
+                        if msg_id:
+                            streamed_ids.add(msg_id)
+                        yield StreamEvent(
+                            type="messages-tuple",
+                            data={
+                                "type": "ai",
+                                "content": "",
+                                "id": msg_id,
+                                "tool_calls": [{"name": tc["name"], "args": tc["args"], "id": tc.get("id")} for tc in tool_calls],
+                            },
+                        )
+
+                elif isinstance(msg_chunk, ToolMessage):
+                    if msg_id:
+                        streamed_ids.add(msg_id)
+                    yield StreamEvent(
+                        type="messages-tuple",
+                        data={
+                            "type": "tool",
+                            "content": self._extract_text(msg_chunk.content),
+                            "name": getattr(msg_chunk, "name", None),
+                            "tool_call_id": getattr(msg_chunk, "tool_call_id", None),
+                            "id": msg_id,
+                        },
+                    )
+                continue
+
+            # mode == "values"
             messages = chunk.get("messages", [])
 
             for msg in messages:
@@ -391,13 +531,20 @@ class DeerFlowClient:
                 if msg_id:
                     seen_ids.add(msg_id)
 
+                # Already streamed through ``messages`` mode — capture
+                # usage once more (defensive: the final AIMessage in the
+                # snapshot may carry usage_metadata that the streamed
+                # chunks did not) but skip synthesizing messages-tuple
+                # events, which would duplicate what the consumer already
+                # received.
+                if msg_id and msg_id in streamed_ids:
+                    if isinstance(msg, AIMessage):
+                        _account_usage(msg_id, getattr(msg, "usage_metadata", None))
+                    continue
+
                 if isinstance(msg, AIMessage):
-                    # Track token usage from AI messages
                     usage = getattr(msg, "usage_metadata", None)
-                    if usage:
-                        cumulative_usage["input_tokens"] += usage.get("input_tokens", 0) or 0
-                        cumulative_usage["output_tokens"] += usage.get("output_tokens", 0) or 0
-                        cumulative_usage["total_tokens"] += usage.get("total_tokens", 0) or 0
+                    counted_usage = _account_usage(msg_id, usage)
 
                     if msg.tool_calls:
                         yield StreamEvent(
@@ -412,13 +559,9 @@ class DeerFlowClient:
 
                     text = self._extract_text(msg.content)
                     if text:
-                        event_data: dict[str, Any] = {"type": "ai", "content": text, "id": msg_id}
-                        if usage:
-                            event_data["usage_metadata"] = {
-                                "input_tokens": usage.get("input_tokens", 0) or 0,
-                                "output_tokens": usage.get("output_tokens", 0) or 0,
-                                "total_tokens": usage.get("total_tokens", 0) or 0,
-                            }
+                        event_data = {"type": "ai", "content": text, "id": msg_id}
+                        if counted_usage:
+                            event_data["usage_metadata"] = counted_usage
                         yield StreamEvent(type="messages-tuple", data=event_data)
 
                 elif isinstance(msg, ToolMessage):
@@ -448,10 +591,12 @@ class DeerFlowClient:
     def chat(self, message: str, *, thread_id: str | None = None, **kwargs) -> str:
         """Send a message and return the final text response.
 
-        Convenience wrapper around :meth:`stream` that returns only the
-        **last** AI text from ``messages-tuple`` events. If the agent emits
-        multiple text segments in one turn, intermediate segments are
-        discarded. Use :meth:`stream` directly to capture all events.
+        Convenience wrapper around :meth:`stream` that accumulates delta
+        ``messages-tuple`` events per ``id`` and returns the text of the
+        **last** AI message to complete.  Intermediate AI messages (e.g.
+        planner drafts) are discarded — only the final id's accumulated
+        text is returned.  Use :meth:`stream` directly if you need every
+        delta as it arrives.
 
         Args:
             message: User message text.
@@ -459,15 +604,24 @@ class DeerFlowClient:
             **kwargs: Override client defaults (same as stream()).
 
         Returns:
-            The last AI message text, or empty string if no response.
+            The accumulated text of the last AI message, or empty string
+            if no AI text was produced.
         """
-        last_text = ""
+        # Accumulator keyed by message id.  Token-level streaming yields
+        # multiple ``messages-tuple`` events sharing the same id, each
+        # carrying a delta that must be concatenated.  Non-streaming mock
+        # sources that emit a single event per id are a degenerate case
+        # of the same logic.
+        buffers: dict[str, str] = {}
+        last_id: str = ""
         for event in self.stream(message, thread_id=thread_id, **kwargs):
             if event.type == "messages-tuple" and event.data.get("type") == "ai":
-                content = event.data.get("content", "")
-                if content:
-                    last_text = content
-        return last_text
+                msg_id = event.data.get("id") or ""
+                delta = event.data.get("content", "")
+                if delta:
+                    buffers[msg_id] = buffers.get(msg_id, "") + delta
+                    last_id = msg_id
+        return buffers.get(last_id, "")
 
     # ------------------------------------------------------------------
     # Public API — configuration queries

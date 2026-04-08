@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage  # noqa: F401
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage  # noqa: F401
 
 from app.gateway.routers.mcp import McpConfigResponse
 from app.gateway.routers.memory import MemoryConfigResponse, MemoryStatusResponse
@@ -225,7 +225,9 @@ class TestStream:
 
         agent.stream.assert_called_once()
         call_kwargs = agent.stream.call_args.kwargs
-        assert call_kwargs["stream_mode"] == ["values", "custom"]
+        # ``messages`` enables token-level streaming of AI text deltas;
+        # see DeerFlowClient.stream() docstring and GitHub issue #1969.
+        assert call_kwargs["stream_mode"] == ["values", "messages", "custom"]
 
         assert events[0].type == "custom"
         assert events[0].data == {"type": "task_started", "task_id": "task-1"}
@@ -350,6 +352,123 @@ class TestStream:
 
         # Should not raise; end event proves it completed
         assert events[-1].type == "end"
+
+    def test_messages_mode_emits_token_deltas(self, client):
+        """stream() forwards LangGraph ``messages`` mode chunks as delta events.
+
+        Regression for bytedance/deer-flow#1969 — before the fix the client
+        only subscribed to ``values`` mode, so LLM output was delivered as
+        a single cumulative dump after each graph node finished instead of
+        token-by-token deltas as the model generated them.
+        """
+        # Three AI chunks sharing the same id, followed by a terminal
+        # values snapshot with the fully assembled message — this matches
+        # the shape LangGraph emits when ``stream_mode`` includes both
+        # ``messages`` and ``values``.
+        assembled = AIMessage(content="Hel lo world!", id="ai-1", usage_metadata={"input_tokens": 3, "output_tokens": 4, "total_tokens": 7})
+        agent = MagicMock()
+        agent.stream.return_value = iter(
+            [
+                ("messages", (AIMessageChunk(content="Hel", id="ai-1"), {})),
+                ("messages", (AIMessageChunk(content=" lo ", id="ai-1"), {})),
+                (
+                    "messages",
+                    (
+                        AIMessageChunk(
+                            content="world!",
+                            id="ai-1",
+                            usage_metadata={"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
+                        ),
+                        {},
+                    ),
+                ),
+                ("values", {"messages": [HumanMessage(content="hi", id="h-1"), assembled]}),
+            ]
+        )
+
+        with (
+            patch.object(client, "_ensure_agent"),
+            patch.object(client, "_agent", agent),
+        ):
+            events = list(client.stream("hi", thread_id="t-stream"))
+
+        # Three delta messages-tuple events, all with the same id, each
+        # carrying only its own delta (not cumulative).
+        ai_text_events = [e for e in events if e.type == "messages-tuple" and e.data.get("type") == "ai" and e.data.get("content")]
+        assert [e.data["content"] for e in ai_text_events] == ["Hel", " lo ", "world!"]
+        assert all(e.data["id"] == "ai-1" for e in ai_text_events)
+
+        # The values snapshot MUST NOT re-synthesize an AI text event for
+        # the already-streamed id (otherwise consumers see duplicated text).
+        assert len(ai_text_events) == 3
+
+        # Usage metadata attached only to the chunk that actually carried
+        # it, and counted into cumulative usage exactly once (the values
+        # snapshot's duplicate usage on the assembled AIMessage must not
+        # be double-counted).
+        events_with_usage = [e for e in ai_text_events if "usage_metadata" in e.data]
+        assert len(events_with_usage) == 1
+        assert events_with_usage[0].data["usage_metadata"] == {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7}
+        end_event = events[-1]
+        assert end_event.type == "end"
+        assert end_event.data["usage"] == {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7}
+
+        # The values snapshot itself is still emitted.
+        assert any(e.type == "values" for e in events)
+
+        # stream_mode includes ``messages`` — the whole point of this fix.
+        call_kwargs = agent.stream.call_args.kwargs
+        assert "messages" in call_kwargs["stream_mode"]
+
+    def test_chat_accumulates_streamed_deltas(self, client):
+        """chat() concatenates per-id deltas from messages mode."""
+        agent = MagicMock()
+        agent.stream.return_value = iter(
+            [
+                ("messages", (AIMessageChunk(content="Hel", id="ai-1"), {})),
+                ("messages", (AIMessageChunk(content="lo ", id="ai-1"), {})),
+                ("messages", (AIMessageChunk(content="world!", id="ai-1"), {})),
+                ("values", {"messages": [HumanMessage(content="hi", id="h-1"), AIMessage(content="Hello world!", id="ai-1")]}),
+            ]
+        )
+
+        with (
+            patch.object(client, "_ensure_agent"),
+            patch.object(client, "_agent", agent),
+        ):
+            result = client.chat("hi", thread_id="t-chat-stream")
+
+        assert result == "Hello world!"
+
+    def test_messages_mode_tool_message(self, client):
+        """stream() forwards ToolMessage chunks from messages mode."""
+        agent = MagicMock()
+        agent.stream.return_value = iter(
+            [
+                (
+                    "messages",
+                    (
+                        ToolMessage(content="file.txt", id="tm-1", tool_call_id="tc-1", name="bash"),
+                        {},
+                    ),
+                ),
+                ("values", {"messages": [HumanMessage(content="ls", id="h-1"), ToolMessage(content="file.txt", id="tm-1", tool_call_id="tc-1", name="bash")]}),
+            ]
+        )
+
+        with (
+            patch.object(client, "_ensure_agent"),
+            patch.object(client, "_agent", agent),
+        ):
+            events = list(client.stream("ls", thread_id="t-tool-stream"))
+
+        tool_events = [e for e in events if e.type == "messages-tuple" and e.data.get("type") == "tool"]
+        # The tool result must be delivered exactly once (from messages
+        # mode), not duplicated by the values-snapshot synthesis path.
+        assert len(tool_events) == 1
+        assert tool_events[0].data["content"] == "file.txt"
+        assert tool_events[0].data["name"] == "bash"
+        assert tool_events[0].data["tool_call_id"] == "tc-1"
 
     def test_list_content_blocks(self, client):
         """stream() handles AIMessage with list-of-blocks content."""
