@@ -407,9 +407,10 @@ class DeerFlowClient:
           touching asyncio.  Bridging the two would require spinning up
           an event loop + thread per call.
         * Gateway events are JSON-serialized by ``serialize()`` for SSE
-          wire transmission.  In-process callers want the raw LangChain
-          objects (``AIMessage``, ``usage_metadata`` as dataclasses), not
-          dicts.
+          wire transmission.  This client yields in-process stream event
+          payloads directly as Python data structures (``StreamEvent``
+          with ``data`` as a plain ``dict``), without the extra
+          JSON/SSE serialization layer used for HTTP delivery.
         * ``StreamBridge`` is an asyncio-queue decoupling producers from
           consumers across an HTTP boundary (``Last-Event-ID`` replay,
           heartbeats, multi-subscriber fan-out).  A single in-process
