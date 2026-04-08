@@ -231,28 +231,36 @@ def require_permission(
                     detail=f"Permission denied: {resource}:{action}",
                 )
 
-            # Owner check for thread-specific resources
+            # Owner check for thread-specific resources.
+            #
+            # 2.0-rc moved thread metadata into the SQL persistence layer
+            # (``threads_meta`` table). We verify ownership via
+            # ``ThreadMetaStore.check_access`` instead of the LangGraph
+            # store path that the original PR #1728 used. ``check_access``
+            # returns True for missing rows (untracked legacy thread) and
+            # for rows whose ``owner_id`` is NULL (shared / pre-auth data),
+            # so this is a strict-deny check rather than strict-allow:
+            # only an *existing* row with a *different* owner_id triggers
+            # 404.
+            #
+            # ``inject_record`` is no longer supported — it was a
+            # convenience for handlers that wanted the LangGraph store
+            # blob; the SQL repo would need a different shape and no
+            # caller in 2.0 needs it.
             if owner_check:
                 thread_id = kwargs.get("thread_id")
                 if thread_id is None:
                     raise ValueError("require_permission with owner_check=True requires 'thread_id' parameter")
 
-                # Get thread and verify ownership
-                from app.gateway.routers.threads import _store_get, get_store
+                from app.gateway.deps import get_thread_meta_repo
 
-                store = get_store(request)
-                if store is not None:
-                    record = await _store_get(store, thread_id)
-                    if record:
-                        owner_id = record.get("metadata", {}).get(owner_filter_key)
-                        if owner_id and owner_id != str(auth.user.id):
-                            raise HTTPException(
-                                status_code=404,
-                                detail=f"Thread {thread_id} not found",
-                            )
-                        # Inject record if requested
-                        if inject_record:
-                            kwargs["thread_record"] = record
+                thread_meta_repo = get_thread_meta_repo(request)
+                allowed = await thread_meta_repo.check_access(thread_id, str(auth.user.id))
+                if not allowed:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Thread {thread_id} not found",
+                    )
 
             return await func(*args, **kwargs)
 
