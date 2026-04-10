@@ -284,16 +284,16 @@ class DeerFlowClient:
         )
 
     @staticmethod
-    def _tool_message_event(msg) -> "StreamEvent":
+    def _tool_message_event(msg: ToolMessage) -> "StreamEvent":
         """Build a ``messages-tuple`` tool-result event from a ToolMessage."""
         return StreamEvent(
             type="messages-tuple",
             data={
                 "type": "tool",
                 "content": DeerFlowClient._extract_text(msg.content),
-                "name": getattr(msg, "name", None),
-                "tool_call_id": getattr(msg, "tool_call_id", None),
-                "id": getattr(msg, "id", None),
+                "name": msg.name,
+                "tool_call_id": msg.tool_call_id,
+                "id": msg.id,
             },
         )
 
