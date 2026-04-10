@@ -22,6 +22,8 @@ venv/
 
 # Environment variables
 .env
+auth.json
+.auth/
 
 # Configuration files
 config.yaml
