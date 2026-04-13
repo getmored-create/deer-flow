@@ -31,6 +31,7 @@ import { humanMessagePlugins } from "@/core/streamdown";
 import { cn } from "@/lib/utils";
 
 import { CopyButton } from "../copy-button";
+import { useThread } from "./context";
 
 import { MarkdownContent } from "./markdown-content";
 
@@ -86,10 +87,12 @@ function MessageImage({
   src,
   alt,
   threadId,
+  isMock,
   maxWidth = "90%",
   ...props
 }: React.ImgHTMLAttributes<HTMLImageElement> & {
   threadId: string;
+  isMock?: boolean;
   maxWidth?: string;
 }) {
   if (!src) return null;
@@ -100,7 +103,9 @@ function MessageImage({
     return <img className={imgClassName} src={src} alt={alt} {...props} />;
   }
 
-  const url = src.startsWith("/mnt/") ? resolveArtifactURL(src, threadId) : src;
+  const url = src.startsWith("/mnt/")
+    ? resolveArtifactURL(src, threadId, isMock)
+    : src;
 
   return (
     <a href={url} target="_blank" rel="noopener noreferrer">
@@ -114,21 +119,27 @@ function MessageContent_({
   message,
   isLoading = false,
   threadId,
-}: {
+  }: {
   className?: string;
   message: Message;
   isLoading?: boolean;
   threadId: string;
 }) {
+  const { isMock } = useThread();
   const rehypePlugins = useRehypeSplitWordsIntoSpans(isLoading);
   const isHuman = message.type === "human";
   const components = useMemo(
     () => ({
       img: (props: ImgHTMLAttributes<HTMLImageElement>) => (
-        <MessageImage {...props} threadId={threadId} maxWidth="90%" />
+        <MessageImage
+          {...props}
+          threadId={threadId}
+          isMock={isMock}
+          maxWidth="90%"
+        />
       ),
     }),
-    [threadId],
+    [isMock, threadId],
   );
 
   const rawContent = extractContentFromMessage(message);
@@ -155,7 +166,7 @@ function MessageContent_({
 
   const filesList =
     files && files.length > 0 ? (
-      <RichFilesList files={files} threadId={threadId} />
+      <RichFilesList files={files} threadId={threadId} isMock={isMock} />
     ) : null;
 
   // Uploading state: mock AI message shown while files upload
@@ -282,9 +293,11 @@ function formatBytes(bytes: number): string {
 function RichFilesList({
   files,
   threadId,
+  isMock,
 }: {
   files: FileInMessage[];
   threadId: string;
+  isMock?: boolean;
 }) {
   if (files.length === 0) return null;
   return (
@@ -294,6 +307,7 @@ function RichFilesList({
           key={`${file.filename}-${index}`}
           file={file}
           threadId={threadId}
+          isMock={isMock}
         />
       ))}
     </div>
@@ -306,9 +320,11 @@ function RichFilesList({
 function RichFileCard({
   file,
   threadId,
+  isMock,
 }: {
   file: FileInMessage;
   threadId: string;
+  isMock?: boolean;
 }) {
   const { t } = useI18n();
   const isUploading = file.status === "uploading";
@@ -343,7 +359,7 @@ function RichFileCard({
 
   if (!file.path) return null;
 
-  const fileUrl = resolveArtifactURL(file.path, threadId);
+  const fileUrl = resolveArtifactURL(file.path, threadId, isMock);
 
   if (isImage) {
     return (

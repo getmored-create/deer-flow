@@ -254,6 +254,11 @@ export function ArtifactFileDetail({
           (language === "markdown" || language === "html") && (
             <ArtifactFilePreview
               content={displayContent}
+              previewUrl={
+                isWriteFile
+                  ? undefined
+                  : urlOfArtifact({ filepath, threadId, isMock })
+              }
               language={language ?? "text"}
             />
           )}
@@ -277,15 +282,17 @@ export function ArtifactFileDetail({
 
 export function ArtifactFilePreview({
   content,
+  previewUrl,
   language,
 }: {
   content: string;
+  previewUrl?: string;
   language: string;
 }) {
   const [htmlPreviewUrl, setHtmlPreviewUrl] = useState<string>();
 
   useEffect(() => {
-    if (language !== "html") {
+    if (language !== "html" || previewUrl) {
       setHtmlPreviewUrl(undefined);
       return;
     }
@@ -297,7 +304,7 @@ export function ArtifactFilePreview({
     return () => {
       URL.revokeObjectURL(url);
     };
-  }, [content, language]);
+  }, [content, language, previewUrl]);
 
   if (language === "markdown") {
     return (
@@ -318,7 +325,7 @@ export function ArtifactFilePreview({
         className="size-full"
         title="Artifact preview"
         sandbox="allow-scripts allow-forms"
-        src={htmlPreviewUrl}
+        src={previewUrl ?? htmlPreviewUrl}
       />
     );
   }
